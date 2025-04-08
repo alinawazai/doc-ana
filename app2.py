@@ -173,6 +173,55 @@ async def process_all_pages_async(data, prompt):
     log_message(f"Total {len(documents)} documents processed asynchronously.")
     return documents
 
+def scale_bboxes(bbox, src_size=(662, 468), dst_size=(4000, 3000)):
+    scale_x = dst_size[0] / src_size[0]
+    scale_y = scale_x
+    return bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y
+async def crop_image_async(image_name, detections, output_dir):
+    image_resource_path = os.path.join(output_dir, image_name.replace(".jpg", ""))
+    image_path = os.path.join(HIGH_RES_DIR, image_name)
+    
+    if not os.path.exists(image_resource_path):
+        os.makedirs(image_resource_path)
+    if not os.path.exists(image_path):
+        log_message(f"High-res image missing: {image_path}")
+        return {}
+
+    try:
+        with Image.open(image_path) as image:
+            image_data = {}
+            for det in detections:
+                label = det["label"]
+                bbox = det["bbox"]
+                label_dir = os.path.join(image_resource_path, str(label))
+                os.makedirs(label_dir, exist_ok=True)
+                x, y, w, h = scale_bboxes(bbox)
+                cropped_img = image.crop((x - w / 2, y - h / 2, x + w / 2, y + h / 2))
+                cropped_name = f"{label}_{len(os.listdir(label_dir)) + 1}.jpg"
+                cropped_path = os.path.join(label_dir, cropped_name)
+                cropped_img.save(cropped_path)
+                image_data.setdefault(label, []).append(cropped_path)
+            image_data["Image_Path"] = image_path
+            return {image_name: image_data}
+    except Exception as e:
+        log_message(f"Error cropping {image_name}: {e}")
+        return {}
+
+async def crop_and_save_async(detection_output, output_dir):
+    log_message("Cropping detected regions using high-res images asynchronously...")
+    output_data = {}
+    tasks = []
+
+    for image_name, detections in detection_output.items():
+        tasks.append(crop_image_async(image_name, detections, output_dir))
+
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        output_data.update(result)
+
+    log_message("Cropping completed.")
+    return output_data
+
 # Process page metadata extraction
 async def process_page_with_metadata_async(page_key, blocks, prompt):
     log_message(f"Processing page: {page_key}")

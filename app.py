@@ -122,16 +122,127 @@ class BlockDetectionModel:
         log_message("Block detection completed.")
         return output
 
-    async def process_batch_async(self, batch):
-        results = self.model(batch)
-        output = {}
-        for result in results:
-            image_name = os.path.basename(result.path)
-            labels = result.boxes.cls.tolist()
-            boxes = result.boxes.xywh.tolist()
-            output[image_name] = [{"label": label, "bbox": box} for label, box in zip(labels, boxes)]
-        return output
+def scale_bboxes(bbox, src_size=(662, 468), dst_size=(4000, 3000)):
+    scale_x = dst_size[0] / src_size[0]
+    scale_y = scale_x
+    return bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y
 
+    
+async def crop_image_async(image_name, detections, output_dir):
+    image_resource_path = os.path.join(output_dir, image_name.replace(".jpg", ""))
+    image_path = os.path.join(HIGH_RES_DIR, image_name)
+    
+    if not os.path.exists(image_resource_path):
+        os.makedirs(image_resource_path)
+    if not os.path.exists(image_path):
+        log_message(f"High-res image missing: {image_path}")
+        return {}
+
+    try:
+        with Image.open(image_path) as image:
+            image_data = {}
+            for det in detections:
+                label = det["label"]
+                bbox = det["bbox"]
+                label_dir = os.path.join(image_resource_path, str(label))
+                os.makedirs(label_dir, exist_ok=True)
+                x, y, w, h = scale_bboxes(bbox)
+                cropped_img = image.crop((x - w / 2, y - h / 2, x + w / 2, y + h / 2))
+                cropped_name = f"{label}_{len(os.listdir(label_dir)) + 1}.jpg"
+                cropped_path = os.path.join(label_dir, cropped_name)
+                cropped_img.save(cropped_path)
+                image_data.setdefault(label, []).append(cropped_path)
+            image_data["Image_Path"] = image_path
+            return {image_name: image_data}
+    except Exception as e:
+        log_message(f"Error cropping {image_name}: {e}")
+        return {}
+# Cropping function (asynchronous)
+async def crop_and_save_async(detection_output, output_dir):
+    log_message("Cropping detected regions using high-res images asynchronously...")
+    output_data = {}
+    tasks = []
+
+    for image_name, detections in detection_output.items():
+        tasks.append(crop_image_async(image_name, detections, output_dir))
+
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        output_data.update(result)
+
+    log_message("Cropping completed.")
+    return output_data
+async def process_batch_async(self, batch):
+    results = self.model(batch)
+    output = {}
+    for result in results:
+        image_name = os.path.basename(result.path)
+        labels = result.boxes.cls.tolist()
+        boxes = result.boxes.xywh.tolist()
+        output[image_name] = [{"label": label, "bbox": box} for label, box in zip(labels, boxes)]
+    return output
+
+# Asynchronous processing for Gemini OCR
+async def process_with_gemini_async(image_paths, prompt):
+    log_message(f"Asynchronously processing {len(image_paths)} images with Gemini OCR...")
+    contents = [prompt]
+    
+    for path in image_paths:
+        try:
+            with Image.open(path) as img:
+                img_resized = img.resize((int(img.width / 2), int(img.height / 2)))
+                contents.append(img_resized)
+        except Exception as e:
+            log_message(f"Error opening {path}: {e}")
+            continue
+    
+    response = await asyncio.to_thread(client.models.generate_content, model="gemini-2.0-flash", contents=contents)
+    log_message("Gemini OCR bulk response received.")
+    resp_text = response.text.strip()
+
+    try:
+        return json.loads(resp_text)
+    except json.JSONDecodeError:
+        log_message(f"Failed to parse JSON: {resp_text}")
+        return None
+
+# Process page metadata extraction
+async def process_page_with_metadata_async(page_key, blocks, prompt):
+    log_message(f"Processing page: {page_key}")
+    all_imgs = []
+    for block_type, paths in blocks.items():
+        if block_type != "Image_Path":
+            all_imgs.extend(paths)
+
+    if not all_imgs:
+        log_message(f"No cropped images for {page_key}")
+        return None
+
+    raw_metadata = await process_with_gemini_async(all_imgs, prompt)
+
+    if raw_metadata:
+        doc = Document(
+            page_content=json.dumps(raw_metadata),
+            metadata={"drawing_path": blocks["Image_Path"], "drawing_name": page_key, "content": "everything"}
+        )
+        log_message(f"Document created for {page_key}")
+        return doc
+    else:
+        log_message(f"No metadata extracted for {page_key}")
+        return None
+# Process pages with metadata using Gemini OCR asynchronously
+async def process_all_pages_async(data, prompt):
+    log_message("Processing all pages asynchronously...")
+    tasks = []
+
+    for key, blocks in data.items():
+        tasks.append(process_page_with_metadata_async(key, blocks, prompt))
+
+    results = await asyncio.gather(*tasks)
+    documents = [result for result in results if result]
+    
+    log_message(f"Total {len(documents)} documents processed asynchronously.")
+    return documents
 # Main async pipeline function
 async def process_pipeline(pdf_path, ocr_prompt):
     log_message("Starting processing pipeline...")
