@@ -72,6 +72,7 @@ if "processed" not in st.session_state:
     st.session_state.vector_store = None
     st.session_state.compression_retriever = None
     st.session_state.previous_pdf_uploaded = None  # Track the last uploaded PDF
+    st.session_state.vector_db_path = None  # Track uploaded vector DB path
 
 # -------------------------
 # Pipeline Functions (Sequential Version)
@@ -241,14 +242,14 @@ def process_all_pages(data, prompt):
 # UI Layout
 # -------------------------
 st.sidebar.title("PDF Processing")
-# It is recommended to add a file named `.streamlit/config.toml` in your project root with:
-# [server]
-# fileWatcherType = "none"
 
-# Track if a new PDF is uploaded
+# PDF upload functionality
 uploaded_pdf = st.sidebar.file_uploader("Upload a PDF", type=["pdf"])
 
-# Reset the session state when a new PDF is uploaded
+# Upload Vector DB functionality
+uploaded_vector_db = st.sidebar.file_uploader("Upload a Vector DB", type=["faiss", "json"])
+
+# Reset session state if a new PDF is uploaded
 if uploaded_pdf:
     if uploaded_pdf.name != st.session_state.previous_pdf_uploaded:
         # Clear previous data and reset the state when a new PDF is uploaded
@@ -264,15 +265,23 @@ if uploaded_pdf:
         f.write(uploaded_pdf.getbuffer())
     st.sidebar.success("PDF uploaded successfully.")
 
+# Process vector db upload
+if uploaded_vector_db:
+    st.session_state.vector_db_path = uploaded_vector_db.name  # Store the vector DB file name
+    # Add the logic for loading the vector DB into your application if needed
+    st.sidebar.success("Vector DB uploaded successfully.")
+
+# --------------------------
+# If no vector DB is uploaded, show the "Run Processing Pipeline" button
 if uploaded_pdf and not st.session_state.processed:
     if st.sidebar.button("Run Processing Pipeline"):
         log_message("PDF uploaded successfully.")
-
+        
         log_message("Converting PDF to images sequentially...")
         low_res_paths = pdf_to_images(pdf_path, LOW_RES_DIR, 662)
         high_res_paths = pdf_to_images(pdf_path, HIGH_RES_DIR, 4000)
         log_message("PDF conversion completed.")
-        # uploaded_pdf = None
+        
         log_message("Running YOLO detection on low-res images...")
         yolo_model = BlockDetectionModel("best_small_yolo11_block_etraction.pt")
         detection_results = yolo_model.predict_batch(LOW_RES_DIR)
@@ -324,6 +333,7 @@ if uploaded_pdf and not st.session_state.processed:
                 "Notes_on_Drawing": "Example notes here."
             }}
             """
+
         log_message("Extracting metadata using Gemini OCR sequentially...")
         gemini_documents = process_all_pages(cropped_data, ocr_prompt)
         log_message("Metadata extraction completed.")
@@ -349,7 +359,7 @@ if uploaded_pdf and not st.session_state.processed:
 
         log_message("Setting up retrievers...")
         bm25_retriever = BM25Retriever.from_documents(gemini_documents, k=10, preprocess_func=word_tokenize)
-        retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k":10})
+        retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, retriever_ss],
             weights=[0.6, 0.4]
@@ -360,33 +370,43 @@ if uploaded_pdf and not st.session_state.processed:
             base_compressor=compressor, base_retriever=ensemble_retriever
         )
         log_message("RAG pipeline set up.")
+        
         st.session_state.processed = True
         st.session_state.gemini_documents = gemini_documents
         st.session_state.vector_store = vector_store
         st.session_state.compression_retriever = compression_retriever
         log_message("Processing pipeline completed.")
 
+# Allow users to download vector DB after processing
+if st.session_state.processed:
+    download_vector_db = st.sidebar.button("Download Vector DB")
+    if download_vector_db:
+        # Provide download functionality (e.g., save to file)
+        vector_db_file = os.path.join(DATA_DIR, "vector_db.faiss")
+        faiss.write_index(st.session_state.vector_store.index, vector_db_file)
+        with open(vector_db_file, "rb") as f:
+            st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
 
+# Query section
 st.title("Chat Interface")
 st.info("Enter your query below to search the processed PDF data.")
 query = st.text_input("Query:")
-if uploaded_pdf and st.session_state.processed:
-    if query:
-        st.write("Searching...")
-        try:
-            results = st.session_state.compression_retriever.invoke(query)
-            st.markdown("### Retrieved Documents:")
-            for doc in results:
-                drawing = doc.metadata.get("drawing_name", "Unknown")
-                st.write(f"**Drawing:** {drawing}")
-                try:
-                    st.json(json.loads(doc.page_content))
-                except Exception:
-                    st.write(doc.page_content)
-                img_path = doc.metadata.get("drawing_path", "")
-                if img_path and os.path.exists(img_path):
-                    st.image(Image.open(img_path), width=400)
-        except Exception as e:
-            st.error(f"Search failed: {e}")
 
-st.write("Streamlit app finished processing.")
+# Handle queries and show results
+if query and st.session_state.processed:
+    st.write("Searching...")
+    try:
+        results = st.session_state.compression_retriever.invoke(query)
+        st.markdown("### Retrieved Documents:")
+        for doc in results:
+            drawing = doc.metadata.get("drawing_name", "Unknown")
+            st.write(f"**Drawing:** {drawing}")
+            try:
+                st.json(json.loads(doc.page_content))
+            except Exception:
+                st.write(doc.page_content)
+            img_path = doc.metadata.get("drawing_path", "")
+            if img_path and os.path.exists(img_path):
+                st.image(Image.open(img_path), width=400)
+    except Exception as e:
+        st.error(f"Search failed: {e}")
