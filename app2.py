@@ -282,6 +282,18 @@ if uploaded_vector_db:
         )
         st.session_state.vector_store = vector_store
         st.session_state.processed = True  # Mark as processed since the vector DB is loaded
+        # Reinitialize the retriever
+        bm25_retriever = BM25Retriever.from_documents(st.session_state.gemini_documents, k=10, preprocess_func=word_tokenize)
+        retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25_retriever, retriever_ss],
+            weights=[0.6, 0.4]
+        )
+        st.session_state.compression_retriever = ContextualCompressionRetriever(
+            base_compressor=CohereRerank(model="rerank-multilingual-v3.0", top_n=5),
+            base_retriever=ensemble_retriever
+        )
+        log_message("Vector DB uploaded and retriever reinitialized.")
 
 # --------------------------
 # If no vector DB is uploaded, show the "Run Processing Pipeline" button
@@ -390,18 +402,14 @@ if uploaded_pdf and not st.session_state.processed:
 
 # Allow users to download vector DB after processing
 if st.session_state.processed:
-    # Disable the download button if the vector DB has been downloaded
-    if 'downloaded' not in st.session_state:
-        download_vector_db = st.sidebar.button("Download Vector DB")
-        if download_vector_db:
-            # Provide download functionality (e.g., save to file)
-            vector_db_file = os.path.join(DATA_DIR, "vector_db.faiss")
-            faiss.write_index(st.session_state.vector_store.index, vector_db_file)
-            with open(vector_db_file, "rb") as f:
-                st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
-            st.session_state.downloaded = True  # Mark the vector DB as downloaded
-    else:
-        st.sidebar.write("Vector DB has been downloaded.")
+    download_vector_db = st.sidebar.button("Download Vector DB")
+    if download_vector_db:
+        # Provide download functionality (e.g., save to file)
+        vector_db_file = os.path.join(DATA_DIR, "vector_db.faiss")
+        faiss.write_index(st.session_state.vector_store.index, vector_db_file)
+        with open(vector_db_file, "rb") as f:
+            st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
+        st.session_state.downloaded = True  # Mark the vector DB as downloaded
 
 # Query section
 st.title("Chat Interface")
