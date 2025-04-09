@@ -270,6 +270,18 @@ if uploaded_vector_db:
     st.session_state.vector_db_path = uploaded_vector_db.name  # Store the vector DB file name
     # Add the logic for loading the vector DB into your application if needed
     st.sidebar.success("Vector DB uploaded successfully.")
+    # Load the vector DB from the file (example for FAISS index)
+    if uploaded_vector_db.type == "faiss":
+        faiss_index = faiss.read_index(uploaded_vector_db)
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+        vector_store = FAISS(
+            embedding_function=embeddings,
+            index=faiss_index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={}
+        )
+        st.session_state.vector_store = vector_store
+        st.session_state.processed = True  # Mark as processed since the vector DB is loaded
 
 # --------------------------
 # If no vector DB is uploaded, show the "Run Processing Pipeline" button
@@ -290,7 +302,6 @@ if uploaded_pdf and not st.session_state.processed:
         log_message("Cropping detected regions using high-res images...")
         cropped_data = crop_and_save(detection_results, OUTPUT_DIR)
         log_message("Cropping completed.")
-
         ocr_prompt = """
             You are an advanced system specialized in extracting standardized metadata from construction drawing texts.
             Within the images you receive, there will be details pertaining to a single construction drawing.
@@ -379,13 +390,18 @@ if uploaded_pdf and not st.session_state.processed:
 
 # Allow users to download vector DB after processing
 if st.session_state.processed:
-    download_vector_db = st.sidebar.button("Download Vector DB")
-    if download_vector_db:
-        # Provide download functionality (e.g., save to file)
-        vector_db_file = os.path.join(DATA_DIR, "vector_db.faiss")
-        faiss.write_index(st.session_state.vector_store.index, vector_db_file)
-        with open(vector_db_file, "rb") as f:
-            st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
+    # Disable the download button if the vector DB has been downloaded
+    if 'downloaded' not in st.session_state:
+        download_vector_db = st.sidebar.button("Download Vector DB")
+        if download_vector_db:
+            # Provide download functionality (e.g., save to file)
+            vector_db_file = os.path.join(DATA_DIR, "vector_db.faiss")
+            faiss.write_index(st.session_state.vector_store.index, vector_db_file)
+            with open(vector_db_file, "rb") as f:
+                st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
+            st.session_state.downloaded = True  # Mark the vector DB as downloaded
+    else:
+        st.sidebar.write("Vector DB has been downloaded.")
 
 # Query section
 st.title("Chat Interface")
@@ -410,3 +426,5 @@ if query and st.session_state.processed:
                 st.image(Image.open(img_path), width=400)
     except Exception as e:
         st.error(f"Search failed: {e}")
+
+st.write("Streamlit app finished processing.")
