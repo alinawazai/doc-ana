@@ -268,8 +268,8 @@ if uploaded_pdf:
 # Process vector db upload
 if uploaded_vector_db:
     st.session_state.vector_db_path = uploaded_vector_db.name  # Store the vector DB file name
-    # Add the logic for loading the vector DB into your application if needed
     st.sidebar.success("Vector DB uploaded successfully.")
+    # Add the logic for loading the vector DB into your application if needed
     # Load the vector DB from the file (example for FAISS index)
     if uploaded_vector_db.type == "faiss":
         faiss_index = faiss.read_index(uploaded_vector_db)
@@ -282,7 +282,8 @@ if uploaded_vector_db:
         )
         st.session_state.vector_store = vector_store
         st.session_state.processed = True  # Mark as processed since the vector DB is loaded
-        # Reinitialize the retriever
+
+        # Reinitialize the retriever after loading the vector DB
         bm25_retriever = BM25Retriever.from_documents(st.session_state.gemini_documents, k=10, preprocess_func=word_tokenize)
         retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
         ensemble_retriever = EnsembleRetriever(
@@ -411,27 +412,31 @@ if st.session_state.processed:
             st.download_button(label="Download Vector DB", data=f, file_name="vector_db.faiss")
         st.session_state.downloaded = True  # Mark the vector DB as downloaded
 
-# Query section
+# Handle queries and show results
 st.title("Chat Interface")
 st.info("Enter your query below to search the processed PDF data.")
 query = st.text_input("Query:")
 
-# Handle queries and show results
+# Handle search query
 if query and st.session_state.processed:
     st.write("Searching...")
     try:
-        results = st.session_state.compression_retriever.invoke(query)
-        st.markdown("### Retrieved Documents:")
-        for doc in results:
-            drawing = doc.metadata.get("drawing_name", "Unknown")
-            st.write(f"**Drawing:** {drawing}")
-            try:
-                st.json(json.loads(doc.page_content))
-            except Exception:
-                st.write(doc.page_content)
-            img_path = doc.metadata.get("drawing_path", "")
-            if img_path and os.path.exists(img_path):
-                st.image(Image.open(img_path), width=400)
+        # If the vector store is uploaded, use the compression retriever to search
+        if st.session_state.vector_store:
+            results = st.session_state.compression_retriever.invoke(query)
+            st.markdown("### Retrieved Documents:")
+            for doc in results:
+                drawing = doc.metadata.get("drawing_name", "Unknown")
+                st.write(f"**Drawing:** {drawing}")
+                try:
+                    st.json(json.loads(doc.page_content))
+                except Exception:
+                    st.write(doc.page_content)
+                img_path = doc.metadata.get("drawing_path", "")
+                if img_path and os.path.exists(img_path):
+                    st.image(Image.open(img_path), width=400)
+        else:
+            st.error("No vector store found. Please upload a vector DB first.")
     except Exception as e:
         st.error(f"Search failed: {e}")
 
