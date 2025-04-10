@@ -159,7 +159,7 @@ class BlockDetectionModel:
             output[image_name] = [{"label": label, "bbox": box} for label, box in zip(labels, boxes)]
         return output
 
-async def predict_batch_async(yolo_model, images, batch_size=5):
+async def predict_batch_async(yolo_model, images, batch_size=10):
     """
     Asynchronously run YOLO on a list of images, in batches, to reduce GPU memory usage.
     """
@@ -242,15 +242,17 @@ async def crop_and_save_batch(detection_output, output_dir, batch_size=10):
     # Process each batch sequentially
     for batch_index, batch in enumerate(batches):
         log_message(f"Processing batch {batch_index + 1} of {len(batches)}...")
-        tasks = []
 
-        for image_name, detections in batch:
-            tasks.append(asyncio.to_thread(crop_single_image, image_name, detections, output_dir))
+        # Collect tasks for each image in this batch
+        tasks = [asyncio.to_thread(crop_single_image, image_name, detections, output_dir) for image_name, detections in batch]
 
         # Wait for all tasks in this batch to complete
         batch_results = await asyncio.gather(*tasks)
 
-        for image_name, image_data in batch_results:
+        # Process results from the batch
+        for result in batch_results:
+            # result is expected to be a tuple (image_name, image_data)
+            image_name, image_data = result
             if image_data is not None:
                 output_data[image_name] = image_data
 
@@ -480,7 +482,7 @@ async def run_processing_pipeline(pdf_path):
     log_message("Block detection completed.")
 
     log_message("Cropping detected regions using high-res images...")
-    cropped_data = await crop_and_save_batch(detection_results, OUTPUT_DIR)
+    cropped_data = await crop_and_save_batch(detection_results, OUTPUT_DIR, batch_size=10)  # Adjust batch size as needed
     log_message("Cropping completed.")
 
     # You can adjust your OCR prompt here if desired
