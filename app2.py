@@ -251,10 +251,11 @@ async def crop_and_save_batch(detection_output, output_dir, batch_size=10):
 
         # Process results from the batch
         for result in batch_results:
-            # result is expected to be a tuple (image_name, image_data)
-            image_name, image_data = result
-            if image_data is not None:
-                output_data[image_name] = image_data
+            # Each result should be a tuple: (image_name, image_data)
+            if result is not None:
+                image_name, image_data = result
+                if image_data is not None:
+                    output_data[image_name] = image_data
 
         # Update the progress in Streamlit
         log_message(f"Batch {batch_index + 1} processing completed.")
