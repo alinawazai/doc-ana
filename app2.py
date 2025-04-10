@@ -159,7 +159,7 @@ class BlockDetectionModel:
             output[image_name] = [{"label": label, "bbox": box} for label, box in zip(labels, boxes)]
         return output
 
-async def predict_batch_async(yolo_model, images, batch_size=10):
+async def predict_batch_async(yolo_model, images, batch_size=5):
     """
     Asynchronously run YOLO on a list of images, in batches, to reduce GPU memory usage.
     """
