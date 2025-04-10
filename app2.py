@@ -227,27 +227,21 @@ def crop_single_image(image_name, detections, output_dir):
         log_message(f"Error cropping {image_name}: {e}")
         return image_name, None
 
-async def crop_and_save(detection_output, output_dir):
+def crop_and_save(detection_output, output_dir):
     """
-    Asynchronously crop the detected blocks from high-res images using the detection results.
+    Synchronously crop the detected blocks from high-res images using the detection results.
     """
     log_message("Cropping detected regions using high-res images...")
 
-    tasks = []
-    for image_name, detections in detection_output.items():
-        tasks.append(asyncio.to_thread(crop_single_image, image_name, detections, output_dir))
-
-    # Run all crops concurrently
-    results = await asyncio.gather(*tasks)
-
-    # Combine into final dictionary
     output_data = {}
-    for (image_name, image_data) in results:
+    for image_name, detections in detection_output.items():
+        image_name, image_data = crop_single_image(image_name, detections, output_dir)
         if image_data is not None:
             output_data[image_name] = image_data
 
     log_message("Cropping completed.")
     return output_data
+
 
 # ---------------
 # Gemini Processing (Async)
@@ -468,7 +462,7 @@ async def run_processing_pipeline(pdf_path):
     log_message("Block detection completed.")
 
     log_message("Cropping detected regions using high-res images...")
-    cropped_data = await crop_and_save(detection_results, OUTPUT_DIR)
+    cropped_data = crop_and_save(detection_results, OUTPUT_DIR)
     log_message("Cropping completed.")
 
     # You can adjust your OCR prompt here if desired
