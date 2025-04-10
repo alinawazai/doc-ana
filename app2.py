@@ -195,7 +195,7 @@ async def detect_blocks(yolo_model, images_dir):
 # Cropping High-Res Images (Async)
 # ---------------
 
-def crop_single_image(image_name, detections, output_dir):
+async def crop_single_image(image_name, detections, output_dir):
     """
     Synchronous helper to crop bounding boxes from a single high-res image.
     """
@@ -220,34 +220,46 @@ def crop_single_image(image_name, detections, output_dir):
                 cropped_name = f"{label}_{len(os.listdir(label_dir)) + 1}.jpg"
                 cropped_path = os.path.join(label_dir, cropped_name)
                 cropped_img.save(cropped_path)
-                image_data.setdefault(label, []).append(cropped_path)
             image_data["Image_Path"] = image_path
             return image_name, image_data
     except Exception as e:
         log_message(f"Error cropping {image_name}: {e}")
         return image_name, None
 
-async def crop_and_save(detection_output, output_dir):
+
+async def crop_and_save_batch(detection_output, output_dir, batch_size=10):
     """
-    Asynchronously crop the detected blocks from high-res images using the detection results.
+    Asynchronously crop the detected regions in batches using high-res images.
     """
     log_message("Cropping detected regions using high-res images...")
 
-    tasks = []
-    for image_name, detections in detection_output.items():
-        tasks.append(asyncio.to_thread(crop_single_image, image_name, detections, output_dir))
+    # Split the detection output into batches
+    all_images = list(detection_output.items())
+    batches = [all_images[i:i + batch_size] for i in range(0, len(all_images), batch_size)]
 
-    # Run all crops concurrently
-    results = await asyncio.gather(*tasks)
-
-    # Combine into final dictionary
     output_data = {}
-    for (image_name, image_data) in results:
-        if image_data is not None:
-            output_data[image_name] = image_data
 
-    log_message("Cropping completed.")
+    # Process each batch sequentially
+    for batch_index, batch in enumerate(batches):
+        log_message(f"Processing batch {batch_index + 1} of {len(batches)}...")
+        tasks = []
+
+        for image_name, detections in batch:
+            tasks.append(asyncio.to_thread(crop_single_image, image_name, detections, output_dir))
+
+        # Wait for all tasks in this batch to complete
+        batch_results = await asyncio.gather(*tasks)
+
+        for image_name, image_data in batch_results:
+            if image_data is not None:
+                output_data[image_name] = image_data
+
+        # Update the progress in Streamlit
+        log_message(f"Batch {batch_index + 1} processing completed.")
+
+    log_message("Cropping completed for all batches.")
     return output_data
+
 
 # ---------------
 # Gemini Processing (Async)
@@ -468,7 +480,7 @@ async def run_processing_pipeline(pdf_path):
     log_message("Block detection completed.")
 
     log_message("Cropping detected regions using high-res images...")
-    cropped_data = await crop_and_save(detection_results, OUTPUT_DIR)
+    cropped_data = await crop_and_save_batch(detection_results, OUTPUT_DIR)
     log_message("Cropping completed.")
 
     # You can adjust your OCR prompt here if desired
