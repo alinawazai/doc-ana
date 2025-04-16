@@ -944,7 +944,7 @@ async def run_pipeline(pdf_path, ocr_prompt):
     detection_results = await yolo_model.predict_batch(LOW_RES_DIR)
 
     log_message("Cropping detected regions using high-res images...")
-    cropped_data = crop_and_save(detection_results, OUTPUT_DIR)
+    cropped_data = await crop_and_save(detection_results, OUTPUT_DIR)
 
     log_message("Extracting metadata using Gemini OCR...")
     gemini_documents = await process_all_pages(cropped_data, ocr_prompt)
