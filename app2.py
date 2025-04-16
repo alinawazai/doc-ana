@@ -776,10 +776,10 @@ async def crop_and_save(detection_output, output_dir):
     log_message("Cropping detected regions using high-res images asynchronously...")
     output_data = {}
 
-    async def crop_image(image_name, detections, image_path):
+    async def crop_image(image_name, detections, image_path, image_resource_path):
         try:
             # Use asyncio.to_thread to offload blocking I/O (image processing) to a separate thread
-            await asyncio.to_thread(crop_single_image, image_name, detections, image_path, output_data)
+            await asyncio.to_thread(crop_single_image, image_name, detections, image_path, output_data, image_resource_path)
         except Exception as e:
             log_message(f"Error cropping {image_name}: {e}")
 
@@ -793,14 +793,15 @@ async def crop_and_save(detection_output, output_dir):
             log_message(f"High-res image missing: {image_path}")
             continue
 
-        tasks.append(crop_image(image_name, detections, image_path))
+        # Ensure that image_resource_path is passed as an argument
+        tasks.append(crop_image(image_name, detections, image_path, image_resource_path))
 
     await asyncio.gather(*tasks)
     log_message("Cropping completed asynchronously.")
     return output_data
 
 # Helper function to crop a single image (to be used in the thread)
-async def crop_single_image(image_name, detections, image_path, output_data, image_resource_path):
+def crop_single_image(image_name, detections, image_path, output_data, image_resource_path):
     try:
         with Image.open(image_path) as image:
             image_data = {}
@@ -820,7 +821,7 @@ async def crop_single_image(image_name, detections, image_path, output_data, ima
             log_message(f"Cropped images saved for {image_name}")
     except Exception as e:
         log_message(f"Error cropping {image_name}: {e}")
-        
+
         
 async def pdf_to_images(pdf_path, output_dir, fixed_length=1080):
     log_message(f"Converting PDF to images at fixed length {fixed_length}px...")
