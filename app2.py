@@ -713,20 +713,18 @@ from google import genai
 import time
 from prompts import COMBINED_PROMPT, OCR_PROMPT
 
-# Initialize async and nest async for compatibility with Streamlit
+# Apply nest_asyncio for Streamlit compatibility with asyncio
 nest_asyncio.apply()
+
+# Load environment variables
 
 # Load environment variables (Streamlit secrets)
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 COHERE_API_KEY = st.secrets["COHERE_API_KEY"]
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Directory setup for storing images and vector data
+# Setup directories
 DATA_DIR = "data"
 LOW_RES_DIR = os.path.join(DATA_DIR, "40_dpi")
 HIGH_RES_DIR = os.path.join(DATA_DIR, "500_dpi")
@@ -735,17 +733,18 @@ VECTOR_DB_DIR = os.path.join(DATA_DIR, "vector_db")
 Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 Path(VECTOR_DB_DIR).mkdir(parents=True, exist_ok=True)
 
-# Session state setup
+# Initialize session state
 if "processed" not in st.session_state:
     st.session_state.processed = False
     st.session_state.final_json_results = []
-    st.session_state.vector_db_path = None  # Path to uploaded vector DB
+    st.session_state.vector_db_path = None
     st.session_state.vector_db_saved = False
 
+# Helper function for logging messages
 def log_message(msg):
     st.sidebar.write(msg)
 
-# PDF to Images conversion
+# PDF to Images conversion (low-res and high-res)
 async def pdf_to_images(pdf_path, output_dir, fixed_length=1080):
     log_message(f"Converting PDF to images at fixed length {fixed_length}px...")
     base_name = os.path.splitext(os.path.basename(pdf_path))[0]
@@ -772,6 +771,7 @@ async def pdf_to_images(pdf_path, output_dir, fixed_length=1080):
     log_message("PDF conversion completed.")
     return file_paths
 
+# Process individual PDF pages
 async def process_page_async(doc, page_num, output_dir, base_name, fixed_length=1080):
     page = doc[page_num]
     scale = fixed_length / page.rect.width
@@ -782,7 +782,7 @@ async def process_page_async(doc, page_num, output_dir, base_name, fixed_length=
     pix.save(image_path)
     return [image_path]
 
-# Block detection using YOLO
+# Block Detection with YOLO
 class BlockDetectionModel:
     def __init__(self, weight, device=None):
         self.device = "cuda" if (device is None and torch.cuda.is_available()) else "cpu"
@@ -793,7 +793,7 @@ class BlockDetectionModel:
         if not os.path.exists(images_dir) or not os.listdir(images_dir):
             raise ValueError(f"Directory {images_dir} is empty or does not exist.")
         images = glob.glob(os.path.join(images_dir, "*.jpg"))
-        log_message(f"Found {len(images)} images for detection.")
+        log_message(f"Found {len(images)} low-res images for detection.")
         
         output = {}
         batch_size = 10
@@ -821,7 +821,7 @@ class BlockDetectionModel:
             output[image_name] = [{"label": label, "bbox": box} for label, box in zip(labels, boxes)]
         return output
 
-# Cropping images based on detected blocks
+# Cropping images based on block detection
 async def crop_and_save_async(detection_output, output_dir):
     log_message("Cropping detected regions using high-res images asynchronously...")
     output_data = {}
@@ -872,7 +872,47 @@ async def crop_image_async(image_name, detections, output_dir):
         log_message(f"Error cropping {image_name}: {e}")
         return {}
 
-# Function to handle saving the vector database (FAISS)
+# Gemini request handling
+async def gemini_call_entire_and_crops(entire_path, cropped_paths, single_prompt):
+    contents = [single_prompt]
+    
+    # Process the entire page image
+    try:
+        with Image.open(entire_path) as img:
+            contents.append(img)
+    except Exception as e:
+        log_message(f"Error processing entire page: {e}")
+    
+    # Process cropped images
+    async def process_cropped_images():
+        tasks = []
+        for cpath in cropped_paths:
+            tasks.append(process_image(cpath))
+        return await asyncio.gather(*tasks)
+
+    async def process_image(image_path):
+        try:
+            with Image.open(image_path) as img:
+                return img
+        except Exception as e:
+            log_message(f"Error processing cropped image {image_path}: {e}")
+            return None
+
+    cropped_images = await process_cropped_images()
+
+    for cropped_img in cropped_images:
+        if cropped_img:
+            contents.append(cropped_img)
+    
+    response = await asyncio.to_thread(client.models.generate_content, model="gemini-2.0-flash", contents=contents)
+    resp_text = response.text.strip()
+
+    try:
+        return json.loads(resp_text)
+    except json.JSONDecodeError:
+        return resp_text
+
+# Vector database (FAISS) saving functionality
 def save_vector_db(vector_store):
     try:
         vector_db_path = os.path.join(VECTOR_DB_DIR, "vector_db_index.faiss")
@@ -883,29 +923,7 @@ def save_vector_db(vector_store):
     except Exception as e:
         st.sidebar.error(f"Failed to save Vector Database: {e}")
 
-# Function to process the images and metadata using Gemini
-async def process_with_gemini_async(image_paths, prompt):
-    log_message(f"Asynchronously processing {len(image_paths)} images with Gemini OCR...")
-    contents = [prompt]
-    
-    for path in image_paths:
-        try:
-            with Image.open(path) as img:
-                contents.append(img)
-        except Exception as e:
-            log_message(f"Error opening {path}: {e}")
-            continue
-    
-    response = await asyncio.to_thread(client.models.generate_content, model="gemini-2.0-flash", contents=contents)
-    resp_text = response.text.strip()
-
-    try:
-        return json.loads(resp_text)
-    except json.JSONDecodeError:
-        log_message(f"Failed to parse JSON: {resp_text}")
-        return None
-
-# Main processing pipeline function
+# Run the full processing pipeline (PDF to Images, YOLO detection, Gemini response, Vector DB creation)
 async def run_processing_pipeline(pdf_path):
     log_message("Running PDF processing pipeline...")
 
@@ -923,14 +941,14 @@ async def run_processing_pipeline(pdf_path):
 
     # Step 4: Process images with Gemini asynchronously
     gemini_prompt = COMBINED_PROMPT
-    gemini_documents = await process_with_gemini_async(cropped_data, gemini_prompt)
+    gemini_documents = await gemini_call_entire_and_crops(cropped_data, gemini_prompt)
 
     if gemini_documents:
         log_message("Metadata extraction completed.")
         # Save metadata to JSON file
         gemini_json_path = os.path.join(DATA_DIR, "gemini_documents.json")
         with open(gemini_json_path, "w") as f:
-            json.dump([doc.dict() for doc in gemini_documents], f, indent=4)
+            json.dump(gemini_documents, f, indent=4)
 
         log_message("Gemini documents saved.")
     else:
@@ -958,7 +976,7 @@ async def run_processing_pipeline(pdf_path):
 
     return vector_store
 
-# Streamlit UI and flow
+# Streamlit UI for uploading PDF, processing, and saving the vector database
 def run_streamlit():
     st.sidebar.title("PDF Processing")
     uploaded_pdf = st.sidebar.file_uploader("Upload a PDF", type=["pdf"])
