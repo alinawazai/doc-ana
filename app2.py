@@ -771,25 +771,43 @@ def scale_bboxes(bbox, src_size=(662, 468), dst_size=(4000, 3000)):
     scale_y = scale_x
     return bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y
 
-def crop_single_image(image_name, detections, output_dir):
-    """
-    Synchronous helper to crop bounding boxes from a single high-res image.
-    """
-    image_resource_path = os.path.join(output_dir, image_name.replace(".jpg", ""))
-    image_path = os.path.join(HIGH_RES_DIR, image_name)
-    if not os.path.exists(image_resource_path):
-        os.makedirs(image_resource_path)
-    if not os.path.exists(image_path):
-        log_message(f"High-res image missing: {image_path}")
-        return image_name, None
+# Asynchronous function for crop_and_save
+async def crop_and_save(detection_output, output_dir):
+    log_message("Cropping detected regions using high-res images asynchronously...")
+    output_data = {}
 
+    async def crop_image(image_name, detections, image_path):
+        try:
+            # Use asyncio.to_thread to offload blocking I/O (image processing) to a separate thread
+            await asyncio.to_thread(crop_single_image, image_name, detections, image_path, output_data)
+        except Exception as e:
+            log_message(f"Error cropping {image_name}: {e}")
+
+    tasks = []
+    for image_name, detections in detection_output.items():
+        image_resource_path = os.path.join(output_dir, image_name.replace(".jpg", ""))
+        image_path = os.path.join(HIGH_RES_DIR, image_name)
+        if not os.path.exists(image_resource_path):
+            os.makedirs(image_resource_path)
+        if not os.path.exists(image_path):
+            log_message(f"High-res image missing: {image_path}")
+            continue
+
+        tasks.append(crop_image(image_name, detections, image_path))
+
+    await asyncio.gather(*tasks)
+    log_message("Cropping completed asynchronously.")
+    return output_data
+
+# Helper function to crop a single image (to be used in the thread)
+async def crop_single_image(image_name, detections, image_path, output_data, image_resource_path):
     try:
         with Image.open(image_path) as image:
             image_data = {}
             for det in detections:
                 label = det["label"]
                 bbox = det["bbox"]
-                label_dir = os.path.join(image_resource_path, str(label))
+                label_dir = os.path.join(image_resource_path, str(label))  # Save in this path
                 os.makedirs(label_dir, exist_ok=True)
                 x, y, w, h = scale_bboxes(bbox)
                 cropped_img = image.crop((x - w / 2, y - h / 2, x + w / 2, y + h / 2))
@@ -798,24 +816,12 @@ def crop_single_image(image_name, detections, output_dir):
                 cropped_img.save(cropped_path)
                 image_data.setdefault(label, []).append(cropped_path)
             image_data["Image_Path"] = image_path
-            return image_name, image_data
+            output_data[image_name] = image_data
+            log_message(f"Cropped images saved for {image_name}")
     except Exception as e:
         log_message(f"Error cropping {image_name}: {e}")
-        return image_name, None
-def crop_and_save(detection_output, output_dir):
-    """
-    Synchronously crop the detected blocks from high-res images using the detection results.
-    """
-    log_message("Cropping detected regions using high-res images...")
-
-    output_data = {}
-    for image_name, detections in detection_output.items():
-        image_name, image_data = crop_single_image(image_name, detections, output_dir)
-        if image_data is not None:
-            output_data[image_name] = image_data
-
-    log_message("Cropping completed.")
-    return output_data
+        
+        
 async def pdf_to_images(pdf_path, output_dir, fixed_length=1080):
     log_message(f"Converting PDF to images at fixed length {fixed_length}px...")
     if not os.path.exists(pdf_path):
