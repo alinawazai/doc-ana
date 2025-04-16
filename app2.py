@@ -750,7 +750,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 def log_message(msg):
     st.sidebar.write(msg)
 
-# Initialize session state (only processed flag and cached results)
 if "processed" not in st.session_state:
     st.session_state.processed = False
     st.session_state.gemini_documents = None
@@ -1135,69 +1134,55 @@ if uploaded_pdf and st.session_state.processed:
 # Vector Store Upload Button
 uploaded_vector_store = st.file_uploader("Upload a vector store", type=[".zip"])
 
-if uploaded_vector_store:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    try:
-        # Load the vector store from the uploaded files, including high-res images
-        faiss_index, inmdocs, docs = load_vector_store_from_zip(uploaded_vector_store)
-
-        embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-        example_embedding = embeddings.embed_query("sample text")
-        d = len(example_embedding)
-        index = faiss.IndexFlatL2(d)
-        vector_store = FAISS(
-            embedding_function=embeddings,
-            index=index,
-            docstore=InMemoryDocstore(),
-            index_to_docstore_id={}
-        )
-        uuids = [str(uuid4()) for _ in range(len(docs))]
-        vector_store.add_documents(documents=docs, ids=uuids)
-        st.session_state.vector_store = vector_store
-        bm25_retriever = BM25Retriever.from_documents(docs, k=10, preprocess_func=word_tokenize)
-        retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
+# Ensure that compression_retriever is initialized correctly when the vector store is processed
+if uploaded_pdf and st.session_state.processed:
+    # Initialize the retriever only after the documents and vector store have been processed
+    if st.session_state.vector_store and not st.session_state.compression_retriever:
+        bm25_retriever = BM25Retriever.from_documents(st.session_state.gemini_documents, k=10, preprocess_func=word_tokenize)
+        retriever_ss = st.session_state.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
         ensemble_retriever = EnsembleRetriever(
             retrievers=[bm25_retriever, retriever_ss],
             weights=[0.6, 0.4]
         )
         compressor = CohereRerank(model="rerank-multilingual-v3.0", top_n=5)
-        compression_retriever = ContextualCompressionRetriever(
+        st.session_state.compression_retriever = ContextualCompressionRetriever(
             base_compressor=compressor, base_retriever=ensemble_retriever
         )
-        st.session_state.compression_retriever = compression_retriever
+        log_message("Compression retriever initialized.")
 
-        st.success(f"Vector store loaded successfully from {uploaded_vector_store.name}.")
-    except Exception as e:
-        st.error(f"Failed to load vector store: {e}")
-
-# Query Interface
+# Query Interface (after retriever is initialized)
 st.title("Query Interface")
 st.info("Enter your query below")
 
 query = st.text_input("Query Here:")
+
 if (uploaded_pdf and st.session_state.processed) or uploaded_vector_store:
     if query:
-        st.write("Searching...")
-        try:
-            results = st.session_state.compression_retriever.invoke(query)
-            st.markdown("### Retrieved Documents:")
-            for doc in results:
-                drawing = doc.metadata.get("drawing_name", "Unknown")
-                st.write(f"**Drawing:** {drawing}")
-                try:
-                    st.json(json.loads(doc.page_content))
-                except Exception:
-                    st.write(doc.page_content)
-                img_path = doc.metadata.get("drawing_path", "")
-                extraction_dir = DATA_DIR
-                img_path2 = os.path.join(st.image_dir_for_vector_db, img_path.split("/")[-1])
-                if img_path and os.path.exists(img_path):
-                    st.image(Image.open(img_path), width=400)
-                elif img_path2 and os.path.exists(img_path2):
-                    st.image(Image.open(img_path2), width=400)
-                else:
-                    st.write(img_path2)
-        except Exception as e:
-            st.error(f"Search failed: {e}")
+        # Ensure the retriever is set before performing the search
+        if st.session_state.compression_retriever:
+            st.write("Searching...")
+            try:
+                results = st.session_state.compression_retriever.invoke(query)
+                st.markdown("### Retrieved Documents:")
+                for doc in results:
+                    drawing = doc.metadata.get("drawing_name", "Unknown")
+                    st.write(f"**Drawing:** {drawing}")
+                    try:
+                        st.json(json.loads(doc.page_content))
+                    except Exception:
+                        st.write(doc.page_content)
+                    img_path = doc.metadata.get("drawing_path", "")
+                    extraction_dir = DATA_DIR
+                    img_path2 = os.path.join(st.image_dir_for_vector_db, img_path.split("/")[-1])
+                    if img_path and os.path.exists(img_path):
+                        st.image(Image.open(img_path), width=400)
+                    elif img_path2 and os.path.exists(img_path2):
+                        st.image(Image.open(img_path2), width=400)
+                    else:
+                        st.write(img_path2)
+            except Exception as e:
+                st.error(f"Search failed: {e}")
+        else:
+            st.error("Retriever is not initialized. Please ensure the PDF has been processed.")
 
 st.write("Streamlit app finished processing.")
