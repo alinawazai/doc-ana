@@ -940,6 +940,110 @@ async def process_all_pages(data, prompt):
             log_message(f"No document returned for {key}")
     log_message(f"Total {len(documents)} documents processed asynchronously.")
     return documents
+def save_vector_store_as_zip(vector_store, documents, zip_filename, high_res_images_dir=HIGH_RES_DIR):
+    # Create a temporary directory to store the files
+    temp_dir = os.path.join(DATA_DIR, "temp_files")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    # Save the FAISS index
+    faiss_index_path = os.path.join(temp_dir, "faiss_index.index")
+    faiss.write_index(vector_store.index, faiss_index_path)
+    
+    # Save the docstore using pickle
+    docstore_path = os.path.join(temp_dir, "docstore.pkl")
+    with open(docstore_path, "wb") as f:
+        pickle.dump(vector_store.docstore, f)
+
+    # Save the documents using pickle
+    document_path = os.path.join(temp_dir, "document.pkl")
+    with open(document_path, "wb") as f:
+        pickle.dump(documents, f)
+
+    # Include the high-resolution images
+    high_res_image_dir = os.path.join(temp_dir, "high_res_images")
+    os.makedirs(high_res_image_dir, exist_ok=True)
+
+    # Copy all high-res images to the temporary directory
+    for image_name in os.listdir(high_res_images_dir):
+        image_path = os.path.join(high_res_images_dir, image_name)
+        if os.path.isfile(image_path):
+            shutil.copy(image_path, os.path.join(high_res_image_dir, image_name))
+    
+    # Create a zip file containing all necessary files
+    zip_file_path = zip_filename
+    with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+        zipf.write(faiss_index_path, "faiss_index.index")
+        zipf.write(docstore_path, "docstore.pkl")
+        zipf.write(document_path, "document.pkl")
+        
+        # Add the images to the zip file
+        for image_name in os.listdir(high_res_image_dir):
+            image_path = os.path.join(high_res_image_dir, image_name)
+            zipf.write(image_path, os.path.join("high_res_images", image_name))
+
+    # Clean up temporary files with debugging output
+    for temp_file in os.listdir(temp_dir):
+        temp_file_path = os.path.join(temp_dir, temp_file)
+        # Debug: Print the file path before removing
+        print(f"Attempting to remove: {temp_file_path}")
+        try:
+            if os.path.exists(temp_file_path):  # Ensure the file exists before removing
+                os.remove(temp_file_path)
+            else:
+                print(f"File not found: {temp_file_path}")
+        except Exception as e:
+            print(f"Failed to remove {temp_file_path}: {e}")
+    
+    shutil.rmtree(temp_dir)  # Remove the temporary directory
+
+    return zip_file_path
+
+
+
+st.image_dir_for_vector_db = DATA_DIR
+
+def load_vector_store_from_zip(zip_filename, extraction_dir=DATA_DIR):
+    # Create a temporary directory to extract the zip content
+    temp_dir = os.path.join(extraction_dir, "temp_files")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    # Extract the zip file
+    with zipfile.ZipFile(zip_filename, 'r') as zipf:
+        zipf.extractall(temp_dir)
+    
+    # Load the FAISS index
+    faiss_index_path = os.path.join(temp_dir, "faiss_index.index")
+    faiss_index = faiss.read_index(faiss_index_path)
+    
+    # Load the docstore
+    docstore_path = os.path.join(temp_dir, "docstore.pkl")
+    with open(docstore_path, "rb") as f:
+        docstore = pickle.load(f)
+
+    # Load the documents
+    document_path = os.path.join(temp_dir, "document.pkl")
+    with open(document_path, "rb") as f:
+        documents = pickle.load(f)
+
+    # Extract high-resolution images to a directory
+    high_res_images_dir = os.path.join(extraction_dir, "high_res_images")
+    st.image_dir_for_vector_db = high_res_images_dir
+    os.makedirs(high_res_images_dir, exist_ok=True)
+
+    for image_name in os.listdir(os.path.join(temp_dir, "high_res_images")):
+        image_path = os.path.join(temp_dir, "high_res_images", image_name)
+        if os.path.isfile(image_path):
+            shutil.move(image_path, os.path.join(high_res_images_dir, image_name))
+
+
+    # # Clean up the temporary directory
+    # for temp_file in os.listdir(temp_dir):
+    #     temp_file_path = os.path.join(temp_dir, temp_file)
+    #     os.remove(temp_file_path)
+
+    shutil.rmtree(temp_dir)  # Remove the temporary directory
+
+    return faiss_index, docstore, documents
 
 async def run_pipeline(pdf_path, ocr_prompt):
     log_message("Converting PDF to images...")
@@ -1002,3 +1106,98 @@ if uploaded_pdf and not st.session_state.processed:
         st.session_state.vector_store = vector_store
         st.session_state.processed = True
         log_message("Processing completed.")
+        
+    
+# Vector Store Download Button
+if uploaded_pdf and st.session_state.processed:
+    # Add the "Download Vector Store" button
+    vector_store_filename = st.text_input("Enter the name for the vector store file:", "vector_store.zip")
+
+    if st.button("Download Vector Store"):
+        # Save the FAISS index and docstore into a zip file with images
+        zip_file_path = save_vector_store_as_zip(
+            st.session_state.vector_store, 
+            st.session_state.gemini_documents, 
+            os.path.join(DATA_DIR, vector_store_filename)
+        )
+        
+        # Offer the zip file for download
+        with open(zip_file_path, "rb") as f:
+            zip_data = f.read()
+
+        st.download_button(
+            label="Download FAISS Vector Store as Zip",
+            data=zip_data,
+            file_name=vector_store_filename,
+            mime="application/zip"
+        )
+
+# Vector Store Upload Button
+uploaded_vector_store = st.file_uploader("Upload a vector store", type=[".zip"])
+
+if uploaded_vector_store:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        # Load the vector store from the uploaded files, including high-res images
+        faiss_index, inmdocs, docs = load_vector_store_from_zip(uploaded_vector_store)
+
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+        example_embedding = embeddings.embed_query("sample text")
+        d = len(example_embedding)
+        index = faiss.IndexFlatL2(d)
+        vector_store = FAISS(
+            embedding_function=embeddings,
+            index=index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={}
+        )
+        uuids = [str(uuid4()) for _ in range(len(docs))]
+        vector_store.add_documents(documents=docs, ids=uuids)
+        st.session_state.vector_store = vector_store
+        bm25_retriever = BM25Retriever.from_documents(docs, k=10, preprocess_func=word_tokenize)
+        retriever_ss = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
+        ensemble_retriever = EnsembleRetriever(
+            retrievers=[bm25_retriever, retriever_ss],
+            weights=[0.6, 0.4]
+        )
+        compressor = CohereRerank(model="rerank-multilingual-v3.0", top_n=5)
+        compression_retriever = ContextualCompressionRetriever(
+            base_compressor=compressor, base_retriever=ensemble_retriever
+        )
+        st.session_state.compression_retriever = compression_retriever
+
+        st.success(f"Vector store loaded successfully from {uploaded_vector_store.name}.")
+    except Exception as e:
+        st.error(f"Failed to load vector store: {e}")
+
+# Query Interface
+st.title("Query Interface")
+st.info("Enter your query below")
+
+query = st.text_input("Query Here:")
+if (uploaded_pdf and st.session_state.processed) or uploaded_vector_store:
+    if query:
+        st.write("Searching...")
+        try:
+            results = st.session_state.compression_retriever.invoke(query)
+            st.markdown("### Retrieved Documents:")
+            for doc in results:
+                drawing = doc.metadata.get("drawing_name", "Unknown")
+                st.write(f"**Drawing:** {drawing}")
+                try:
+                    st.json(json.loads(doc.page_content))
+                except Exception:
+                    st.write(doc.page_content)
+                img_path = doc.metadata.get("drawing_path", "")
+                extraction_dir = DATA_DIR
+                img_path2 = os.path.join(st.image_dir_for_vector_db, img_path.split("/")[-1])
+                if img_path and os.path.exists(img_path):
+                    st.image(Image.open(img_path), width=400)
+                elif img_path2 and os.path.exists(img_path2):
+                    st.image(Image.open(img_path2), width=400)
+                else:
+                    st.write(img_path2)
+        except Exception as e:
+            st.error(f"Search failed: {e}")
+
+st.write("Streamlit app finished processing.")
