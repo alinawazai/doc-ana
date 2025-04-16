@@ -711,6 +711,7 @@ from nltk.tokenize import word_tokenize
 import nltk
 from google import genai
 import time
+from prompts import COMBINED_PROMPT, OCR_PROMPT
 
 # Initialize async and nest async for compatibility with Streamlit
 nest_asyncio.apply()
@@ -921,7 +922,7 @@ async def run_processing_pipeline(pdf_path):
     cropped_data = await crop_and_save_async(detection_results, OUTPUT_DIR)
 
     # Step 4: Process images with Gemini asynchronously
-    gemini_prompt = "YOUR_PROMPT"
+    gemini_prompt = COMBINED_PROMPT
     gemini_documents = await process_with_gemini_async(cropped_data, gemini_prompt)
 
     if gemini_documents:
