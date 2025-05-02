@@ -1058,7 +1058,11 @@ async def run_pipeline(pdf_path, ocr_prompt):
 
     log_message("Extracting metadata using Gemini OCR...")
     gemini_documents = await process_all_pages(cropped_data, ocr_prompt)
-
+    combined_path = os.path.join(DATA_DIR, "gemini_combined.json")
+    with open(combined_path, "w", encoding="utf-8") as jf:
+        json.dump([json.loads(d.page_content) for d in gemini_documents],
+                  jf, ensure_ascii=False, indent=4)
+    log_message(f"Combined Gemini JSON saved → {combined_path}")
     log_message("Building vector store for semantic search...")
     embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
     example_embedding = embeddings.embed_query("sample text")

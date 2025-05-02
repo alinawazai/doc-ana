@@ -42,7 +42,6 @@ OCR_PROMPT = """
                 """
                 
                 
-
 COMBINED_PROMPT = """
 
 You are an intelligent extraction system designed to analyze architectural and structural drawing images and return structured metadata in a clean JSON format. You will receive both full-page images and cropped block images of a construction drawing. Your task is to identify and extract key information from these images, similar to how a civil engineer would review technical drawings.
@@ -72,8 +71,6 @@ Return a single JSON object with the following fields:
                 "Revision_Number": 0,
                 "Scale": "Scale of Drawing",
                 "Architects": ["Architect Name(s)"],
-                "Notes_on_Drawing": "Notes/annotations on drawing",
-                "Table_on_Drawing": "Markdown formatted table if applicable"
             },
             "Additional_Details": {
                 "Number_of_Units": 0,
@@ -237,8 +234,6 @@ Example Output:
                     "Revision_Number": 0,
                     "Scale": "A1 : 1/100, A3 : 1/200",
                     "Architects": ["Unknown"],
-                    "Notes_on_Drawing": "N/A",
-                    "Table_on_Drawing": ""
                 },
                 "Additional_Details": {
                     "Number_of_Units": 0,
@@ -287,8 +282,8 @@ Example Output:
                         }
                     ]
                 },
-                "Notes_on_Drawing": "N/A",
-                "Table_on_Drawing": "N/A",
+                "Notes_on_Drawing": "Notes/annotations on drawing",
+                "Table_on_Drawing": "Markdown formatted table if applicable if available else return N/A",
             }
     ==================================================================================
     GENERAL GUIDELINES:
