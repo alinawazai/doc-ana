@@ -1077,7 +1077,7 @@ async def run_pipeline(pdf_path, ocr_prompt):
     uuids = [str(uuid4()) for _ in range(len(gemini_documents))]
     vector_store.add_documents(documents=gemini_documents, ids=uuids)
 
-    return gemini_documents, vector_store
+    return gemini_documents, vector_store, combined_path
 
 # -------------------------
 # UI Layout (Streamlit)
@@ -1102,15 +1102,24 @@ if uploaded_pdf and not st.session_state.processed:
     if st.sidebar.button("Run Processing Pipeline"):
         log_message("Starting pipeline...")
         ocr_prompt = COMBINED_PROMPT
-        gemini_documents, vector_store = asyncio.run(run_pipeline(pdf_path, ocr_prompt))
+        gemini_documents, vector_store, json_path = asyncio.run(run_pipeline(pdf_path, ocr_prompt))
 
         # Update session state
         st.session_state.gemini_documents = gemini_documents
         st.session_state.vector_store = vector_store
+        st.session_state.json_path       = json_path
         st.session_state.processed = True
         log_message("Processing completed.")
         
-    
+
+if st.session_state.get("json_path"):
+    with open(st.session_state.json_path, "rb") as jf:
+        st.download_button(
+            label="📥 Download combined Gemini JSON",
+            data=jf.read(),
+            file_name="gemini_combined.json",
+            mime="application/json"
+        )    
 # Vector Store Download Button
 if uploaded_pdf and st.session_state.processed:
     # Add the "Download Vector Store" button
